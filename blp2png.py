@@ -2,6 +2,7 @@ import struct
 import math
 import sys
 import os
+import numpy as np
 from PIL import Image
 
 # BLP Encodings
@@ -230,6 +231,9 @@ class BlpConverter:
             print("Error: No data found.")
             return
 
+        encoding_names = {BLP_JPEG: "JPEG", BLP_PALETTE: "Palette", BLP_DXT: "DXT", BLP_ARGB8888: "ARGB8888"}
+        print(f"Detected BLP Format: {encoding_names.get(self.color_encoding, 'Unknown')}")
+
         if self.color_encoding == BLP_PALETTE:
             pic = bytearray(w * h * 4)
             for i in range(w * h):
@@ -253,27 +257,73 @@ class BlpConverter:
             img.save(path)
             print(f"Saved to {path}")
         except ImportError:
-            # Fallback to PPM only if Pillow is actually missing
             ppm_path = path.replace(".png", ".ppm")
             with open(ppm_path, "wb") as f:
-                f.write(f"P6\n{w} {h}\n255\n".encode('ascii'))
+                f.write(f"P6\\n{w} {h}\\n255\\n".encode('ascii'))
                 f.write(pic[:w * h * 3])
             print(f"Pillow not found. Saved fallback {ppm_path}")
+
+    def png_to_blp(self, output_path, target_format=BLP_ARGB8888):
+        img = Image.open(self.filename).convert("RGBA")
+        w, h = img.size
+        
+        out_f = open(output_path, "wb")
+        
+        encoding = BLP_DXT if target_format in (BLP_DXT1, BLP_DXT3, BLP_DXT5) else BLP_ARGB8888
+        
+        out_f.write(struct.pack("<I", self.BLP2Magic))
+        out_f.write(struct.pack("<I", 1)) # Version
+        out_f.write(struct.pack("<B", encoding))
+        out_f.write(struct.pack("<B", 1 if encoding == BLP_DXT else 0)) # Alpha size
+        out_f.write(struct.pack("<B", target_format))
+        out_f.write(struct.pack("<B", 0)) # Has mips
+        out_f.write(struct.pack("<I", w))
+        out_f.write(struct.pack("<I", h))
+        
+        for i in range(16):
+            out_f.write(struct.pack("<I", 0)) # Mip offsets
+            out_f.write(struct.pack("<I", 0)) # Mip sizes
+            
+        if encoding == BLP_ARGB8888:
+            out_f.write(img.tobytes())
+        else:
+            print(f"Warning: DXT encoding is complex. Falling back to ARGB8888 for PNG->BLP.")
+            out_f.write(img.tobytes())
+            
+        out_f.close()
+        print(f"Converted PNG to BLP at {output_path} (Format: {target_format})")
 
 def byte_or_0(val):
     return val & 0xFF
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python3 blp2png.py <input_file.blp>")
+        print("Usage:")
+        print("  blp2png.py <input.blp>              # Convert BLP to PNG")
+        print("  blp2png.py <input.png> [format_id] # Convert PNG to BLP")
+        print("    Format IDs: 0:DXT1, 1:DXT3, 2:ARGB8888, 3:ARGB1555, 4:ARGB4444, 5:RGB565, 6:A8, 7:DXT5, 11:BC5")
+        print("    (Default format for PNG->BLP is 2:ARGB8888)")
         sys.exit(1)
     
     input_file = sys.argv[1]
-    output_file = os.path.splitext(input_file)[0] + ".png"
+    ext = os.path.splitext(input_file)[1].lower()
     
     try:
-        converter = BlpConverter(input_file)
-        converter.convert(output_file)
+        if ext == ".png":
+            output_file = os.path.splitext(input_file)[0] + ".blp"
+            converter = BlpConverter(input_file)
+            target_format = 2 # Default ARGB8888
+            if len(sys.argv) > 2:
+                try:
+                    target_format = int(sys.argv[2])
+                except ValueError:
+                    print("Invalid format ID provided. Defaulting to 2 (ARGB8888).")
+            
+            converter.png_to_blp(output_file, target_format)
+        else:
+            output_file = os.path.splitext(input_file)[0] + ".png"
+            converter = BlpConverter(input_file)
+            converter.convert(output_file)
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)
